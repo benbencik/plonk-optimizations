@@ -651,6 +651,7 @@ impl Permutation {
     // in the numerator_irreducible and denominator_irreducible functions
     pub fn compute_permutation_poly<F: FftField>(
         &self,
+        roots: Vec<F>,
         domain: &GeneralEvaluationDomain<F>,
         wires: (&[F], &[F], &[F], &[F]),
         beta: F,
@@ -686,10 +687,6 @@ impl Permutation {
             sigma_mappings.3
         )
         .map(|(s0, s1, s2, s3)| vec![s0, s1, s2, s3]);
-
-        // Compute all roots
-        // Non-parallelizable?
-        let roots: Vec<F> = domain.elements().collect();
 
         let product_argument = izip!(roots, gatewise_sigmas, gatewise_wires)
             // Associate each wire value in a gate with the k defining its coset
@@ -899,7 +896,10 @@ mod test {
             .map(|v| DensePolynomial::from_coefficients_vec(domain.ifft(v)))
             .collect();
 
+        let roots = domain.elements().collect();
+
         let mz = cs.perm.compute_permutation_poly(
+            roots,
             &domain,
             (&w_l_scalar, &w_r_scalar, &w_o_scalar, &w_4_scalar),
             beta,

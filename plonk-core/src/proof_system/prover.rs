@@ -28,6 +28,7 @@ use ark_poly::{
 use core::marker::PhantomData;
 use itertools::izip;
 use merlin::Transcript;
+use rayon::prelude::*;
 
 /// Abstraction structure designed to construct a circuit and generate
 /// [`Proof`]s for it.
@@ -181,9 +182,8 @@ where
     fn zero_pad_evaluations_recursive(
         &self,
         m: usize,
-        domain: GeneralEvaluationDomain<F>,
+        domain_elements: &Vec<F>,
     ) -> Vec<F> {
-        let domain_elements: Vec<F> = domain.elements().collect();
         let n = domain_elements.len();
 
         let mut pad_eval = vec![F::zero(); m];
@@ -277,9 +277,10 @@ where
     }
 
     #[allow(dead_code)]
-    fn construct_wire_poly_variant(
+    fn construct_wire_poly_div(
         &self,
         domain: GeneralEvaluationDomain<F>,
+        domain_elements: &Vec<F>,
     ) -> (
         Vec<F>,
         Vec<F>,
@@ -295,7 +296,7 @@ where
 
         // zero's pad - works
         let pad: Vec<F> = (m..n).map(|_| F::zero()).collect();
-        let pad_eval = self.zero_pad_evaluations_recursive(m, domain);
+        let pad_eval = self.zero_pad_evaluations_recursive(m, domain_elements);
 
         // // one's pad
         // let pad: Vec<F> = vec![F::one(); n - m];
@@ -427,9 +428,48 @@ where
     }
 
     #[allow(dead_code)]
-    fn construct_wire_poly_pairwise(
+    /// Wire polynomial degree reduction using pair-wise division in coset
+    fn reduce_pairwise_div(
+        &self,
+        wire_vec: &Vec<F>,
+        pad_eval: &Vec<F>,
+        pad_coset_eval: &Vec<F>,
+        domain: &GeneralEvaluationDomain<F>,
+    ) -> DensePolynomial<F> {
+        // pad_eval size 0..m wire size 0..n
+        let mut pad_mul = vec![F::zero(); wire_vec.len()];
+
+        pad_mul
+            .par_iter_mut()
+            .zip(wire_vec.par_iter())
+            .zip(pad_eval.par_iter())
+            .for_each(|((pad_mul_i, &wire_vec_i), &pad_eval_i)| {
+                *pad_mul_i = wire_vec_i * pad_eval_i;
+            });
+
+        let pad_mul_poly =
+            DensePolynomial::from_coefficients_vec(domain.ifft(&pad_mul));
+
+        let mut pad_mul_coset_eval = domain.coset_fft(&pad_mul_poly.coeffs);
+
+        pad_mul_coset_eval.par_iter_mut().enumerate().for_each(
+            |(i, pad_mul_coset_eval_i)| {
+                *pad_mul_coset_eval_i /= pad_coset_eval[i];
+            },
+        );
+
+        // interpolate reduced wire polynomial
+
+        DensePolynomial::from_coefficients_vec(
+            domain.coset_ifft(&pad_mul_coset_eval),
+        )
+    }
+
+    #[allow(dead_code)]
+    fn construct_wire_pairwise_div(
         &self,
         domain: GeneralEvaluationDomain<F>,
+        domain_elements: &Vec<F>,
     ) -> (
         Vec<F>,
         Vec<F>,
@@ -440,30 +480,48 @@ where
         DensePolynomial<F>,
         DensePolynomial<F>,
     ) {
+        // println!("Pairwise division implementation");
         let n = domain.size();
         let m = self.cs.w_l.len();
 
-        // zero's pad - works
         let pad: Vec<F> = (m..n).map(|_| F::zero()).collect();
-        let pad_eval = self.zero_pad_evaluations_recursive(m, domain);
+        let pad_eval = self.zero_pad_evaluations_recursive(m, domain_elements);
+        let pad_poly: DensePolynomial<F> =
+            DensePolynomial::from_coefficients_vec(domain.ifft(&pad_eval));
+        let pad_coset_eval = domain.coset_fft(&pad_poly.coeffs);
 
         let w_l_scalar = [&self.to_scalars(&self.cs.w_l)[..], &pad].concat();
         let w_r_scalar = [&self.to_scalars(&self.cs.w_r)[..], &pad].concat();
         let w_o_scalar = [&self.to_scalars(&self.cs.w_o)[..], &pad].concat();
         let w_4_scalar = [&self.to_scalars(&self.cs.w_4)[..], &pad].concat();
 
-        let pad_poly: DensePolynomial<F> =
-            DensePolynomial::from_coefficients_vec(domain.ifft(&pad_eval));
-        let pad_poly = DenseOrSparsePolynomial::from(pad_poly);
+        let w_l_poly = self.reduce_pairwise_div(
+            &w_l_scalar,
+            &pad_eval,
+            &pad_coset_eval,
+            &domain,
+        );
 
-        let w_l_poly =
-            self.reduce_poly_div(&w_l_scalar, &pad_eval, &pad_poly, &domain, m);
-        let w_r_poly =
-            self.reduce_poly_div(&w_r_scalar, &pad_eval, &pad_poly, &domain, m);
-        let w_o_poly =
-            self.reduce_poly_div(&w_o_scalar, &pad_eval, &pad_poly, &domain, m);
-        let w_4_poly =
-            self.reduce_poly_div(&w_4_scalar, &pad_eval, &pad_poly, &domain, m);
+        let w_r_poly = self.reduce_pairwise_div(
+            &w_r_scalar,
+            &pad_eval,
+            &pad_coset_eval,
+            &domain,
+        );
+
+        let w_o_poly = self.reduce_pairwise_div(
+            &w_o_scalar,
+            &pad_eval,
+            &pad_coset_eval,
+            &domain,
+        );
+
+        let w_4_poly = self.reduce_pairwise_div(
+            &w_4_scalar,
+            &pad_eval,
+            &pad_coset_eval,
+            &domain,
+        );
 
         (
             w_l_scalar, w_r_scalar, w_o_scalar, w_4_scalar, w_l_poly, w_r_poly,
@@ -502,12 +560,16 @@ where
         //
         // Convert Variables to scalars padding them to the
         // correct domain size.
-
-        let (w_l, w_r, w_o, w_4, w_l_poly, w_r_poly, w_o_poly, w_4_poly) =
-            self.construct_wire_poly(domain);
+        let domain_elements: Vec<F> = domain.elements().collect();
 
         // let (w_l, w_r, w_o, w_4, w_l_poly, w_r_poly, w_o_poly, w_4_poly) =
-        //     self.construct_wire_poly_variant(domain);
+        //     self.construct_wire_poly(domain);
+
+        // let (w_l, w_r, w_o, w_4, w_l_poly, w_r_poly, w_o_poly, w_4_poly) =
+        // self.construct_wire_poly_div(domain, &domain_elements);
+
+        let (w_l, w_r, w_o, w_4, w_l_poly, w_r_poly, w_o_poly, w_4_poly) =
+            self.construct_wire_pairwise_div(domain, &domain_elements);
 
         // println!("deg: {:?}", w_l_poly.degree());
         // for i in 0..domain.size() {
@@ -667,6 +729,7 @@ where
         assert!(delta != epsilon, "challenges must be different");
 
         let z_poly = self.cs.perm.compute_permutation_poly(
+            domain_elements,
             &domain,
             (w_l_scalar, w_r_scalar, w_o_scalar, w_4_scalar),
             beta,
