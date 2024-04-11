@@ -19,6 +19,8 @@ use crate::{
 };
 use ark_ec::{ModelParameters, TEModelParameters};
 use ark_ff::PrimeField;
+use ark_poly::univariate::DenseOrSparsePolynomial;
+use ark_poly::Polynomial;
 use ark_poly::{
     univariate::DensePolynomial, EvaluationDomain, GeneralEvaluationDomain,
     UVPolynomial,
@@ -156,6 +158,319 @@ where
         self.preprocessed_transcript.append_message(label, message);
     }
 
+    #[allow(dead_code)]
+    /// Naive method to compute evaluations of zero padding polynomial
+    fn zero_pad_evaluations_naive(
+        &self,
+        m: usize,
+        domain: GeneralEvaluationDomain<F>,
+    ) -> Vec<F> {
+        let domain_elem: Vec<F> = domain.elements().collect();
+
+        let mut pad_eval = vec![F::one(); m];
+        for i in 0..m {
+            for j in m..domain.size() {
+                pad_eval[i] *= domain_elem[i] - domain_elem[j];
+            }
+        }
+        pad_eval
+    }
+
+    #[allow(dead_code)]
+    /// Compute evaluations of zero padding polynomial recursively
+    fn zero_pad_evaluations_recursive(
+        &self,
+        m: usize,
+        domain: GeneralEvaluationDomain<F>,
+    ) -> Vec<F> {
+        let domain_elements: Vec<F> = domain.elements().collect();
+        let n = domain_elements.len();
+
+        let mut pad_eval = vec![F::zero(); m];
+        pad_eval[0] = domain_elements
+            .iter()
+            .skip(m)
+            .fold(F::one(), |acc, &x| acc * (domain_elements[0] - x));
+
+        for i in 1..m {
+            let nom = domain_elements[i - 1] - domain_elements[m - 1];
+            let denom = domain_elements[i - 1] - domain_elements[n - 1];
+            pad_eval[i] =
+                (nom * domain_elements[n - m]) / denom * pad_eval[i - 1];
+        }
+
+        pad_eval
+    }
+
+    #[allow(dead_code)]
+    fn construct_wire_poly(
+        &self,
+        domain: GeneralEvaluationDomain<F>,
+    ) -> (
+        Vec<F>,
+        Vec<F>,
+        Vec<F>,
+        Vec<F>,
+        DensePolynomial<F>,
+        DensePolynomial<F>,
+        DensePolynomial<F>,
+        DensePolynomial<F>,
+    ) {
+        // println!("Standard implementation");
+
+        let n = domain.size();
+        // let pad = vec![F::one(); n - self.cs.w_l.len()];
+        let pad: Vec<F> = (n - self.cs.w_l.len()..n)
+            .map(|i| domain.element(i))
+            .collect();
+        let w_l_scalar = [&self.to_scalars(&self.cs.w_l)[..], &pad].concat();
+        let w_r_scalar = [&self.to_scalars(&self.cs.w_r)[..], &pad].concat();
+        let w_o_scalar = [&self.to_scalars(&self.cs.w_o)[..], &pad].concat();
+        let w_4_scalar = [&self.to_scalars(&self.cs.w_4)[..], &pad].concat();
+
+        // Witnesses are now in evaluation form, convert them to coefficients
+        // so that we may commit to them.
+        let w_l_poly =
+            DensePolynomial::from_coefficients_vec(domain.ifft(&w_l_scalar));
+        let w_r_poly =
+            DensePolynomial::from_coefficients_vec(domain.ifft(&w_r_scalar));
+        let w_o_poly =
+            DensePolynomial::from_coefficients_vec(domain.ifft(&w_o_scalar));
+        let w_4_poly =
+            DensePolynomial::from_coefficients_vec(domain.ifft(&w_4_scalar));
+
+        (
+            w_l_scalar, w_r_scalar, w_o_scalar, w_4_scalar, w_l_poly, w_r_poly,
+            w_o_poly, w_4_poly,
+        )
+    }
+
+    fn reduce_poly_div(
+        &self,
+        w_scalar: &Vec<F>,
+        pad_eval: &Vec<F>,
+        pad_poly: &DenseOrSparsePolynomial<F>,
+        domain: &GeneralEvaluationDomain<F>,
+        m: usize,
+    ) -> DensePolynomial<F> {
+        let mut pad_mul = vec![F::zero(); domain.size()];
+
+        for i in 0..domain.size() {
+            if i < m {
+                pad_mul[i] = w_scalar[i] * pad_eval[i];
+            } else {
+                pad_mul[i] = w_scalar[i];
+            }
+        }
+
+        let w_poly = DenseOrSparsePolynomial::from(
+            DensePolynomial::from_coefficients_vec(domain.ifft(&pad_mul)),
+        );
+        let reduced = w_poly.divide_with_q_and_r(&pad_poly).unwrap();
+        println!(
+            "result: {:?}, remainder: {:?}",
+            reduced.0.degree(),
+            reduced.1.degree()
+        );
+        let res = reduced.0;
+        res
+    }
+
+    #[allow(dead_code)]
+    fn construct_wire_poly_variant(
+        &self,
+        domain: GeneralEvaluationDomain<F>,
+    ) -> (
+        Vec<F>,
+        Vec<F>,
+        Vec<F>,
+        Vec<F>,
+        DensePolynomial<F>,
+        DensePolynomial<F>,
+        DensePolynomial<F>,
+        DensePolynomial<F>,
+    ) {
+        let n = domain.size();
+        let m = self.cs.w_l.len();
+
+        // zero's pad - works
+        let pad: Vec<F> = (m..n).map(|_| F::zero()).collect();
+        let pad_eval = self.zero_pad_evaluations_recursive(m, domain);
+
+        // // one's pad
+        // let pad: Vec<F> = vec![F::one(); n - m];
+        // let pad_eval = vec![F::one(); n];
+
+        // x pad - xxx
+        // let pad: Vec<F> = (m..n).map(|i| domain.element(i)).collect();
+        // let pad_eval: Vec<F> = (0..n).map(|i| domain.element(i)).collect();
+
+        // // x - omega^m - works
+        // let pad: Vec<F> = (m..n)
+        //     .map(|i| domain.element(i) - domain.element(m))
+        //     .collect();
+        // let pad_eval: Vec<F> = (0..n)
+        //     .map(|i| domain.element(i) - domain.element(m))
+        //     .collect();
+
+        // // x + omega^{n-m} - works
+        // let pad: Vec<F> = (m..n)
+        //     .map(|i| domain.element(i) + domain.element(n - m))
+        //     .collect();
+        // let pad_eval: Vec<F> = (0..n)
+        //     .map(|i| domain.element(i) + domain.element(n - m))
+        //     .collect();
+
+        // // x - omega^{m+1} - works
+        // let pad: Vec<F> = (m..n)
+        //     .map(|i| domain.element(i) - domain.element(m + 1))
+        //     .collect();
+        // let pad_eval: Vec<F> = (0..n)
+        //     .map(|i| domain.element(i) - domain.element(m + 1))
+        //     .collect();
+
+        // // x - omega - works
+        // let pad: Vec<F> = (m..n)
+        //     .map(|i| domain.element(i) - domain.element(1))
+        //     .collect();
+        // let pad_eval: Vec<F> = (0..n)
+        //     .map(|i| domain.element(i) - domain.element(1))
+        //     .collect();
+
+        // // (x-omega^m)(x - omega^(m+1)) - works
+        // let pad: Vec<F> = (m..n)
+        //     .map(|i| {
+        //         (domain.element(i) - domain.element(m))
+        //             * (domain.element(i) - domain.element(m + 1))
+        //     })
+        //     .collect();
+        // let pad_eval: Vec<F> = (0..n)
+        //     .map(|i| {
+        //         (domain.element(i) - domain.element(m))
+        //             * (domain.element(i) - domain.element(m + 1))
+        //     })
+        //     .collect();
+
+        // // x^2 - x*omega^{2m+1} + omega^{2m+1}
+        // let pad: Vec<F> = (m..n)
+        //     .map(|i| {
+        //         (domain.element(i) * domain.element(i))
+        //             - domain.element(2 * m + 1) * domain.element(i)
+        //             + domain.element(2 * m + 1)
+        //     })
+        //     .collect();
+        // let pad_eval: Vec<F> = (0..n)
+        //     .map(|i| {
+        //         (domain.element(i) * domain.element(i))
+        //             - domain.element(2 * m + 1) * domain.element(i)
+        //             + domain.element(2 * m + 1)
+        //     })
+        //     .collect();
+
+        // // (x-omega^m)(x - omega^(m+1))(x - omega^(m+2)) - works
+        // let pad: Vec<F> = (m..n)
+        //     .map(|i| {
+        //         (domain.element(i) - domain.element(m))
+        //             * (domain.element(i) - domain.element(m + 1))
+        //             * (domain.element(i) - domain.element(m + 2))
+        //     })
+        //     .collect();
+        // let pad_eval: Vec<F> = (0..n)
+        //     .map(|i| {
+        //         (domain.element(i) - domain.element(m))
+        //             * (domain.element(i) - domain.element(m + 1))
+        //             * (domain.element(i) - domain.element(m + 2))
+        //     })
+        //     .collect();
+
+        // // x^3 - x^2*omega^{m+2}
+        // let pad: Vec<F> = (m..n)
+        //     .map(|i| {
+        //         (domain.element(i) * domain.element(i) * domain.element(i))
+        //             - (domain.element(i) * domain.element(i))
+        //                 * domain.element(m + 2)
+        //     })
+        //     .collect();
+        // let pad_eval: Vec<F> = (0..n)
+        //     .map(|i| {
+        //         (domain.element(i) * domain.element(i) * domain.element(i))
+        //             - (domain.element(i) * domain.element(i))
+        //                 * domain.element(m + 2)
+        //     })
+        //     .collect();
+
+        let w_l_scalar = [&self.to_scalars(&self.cs.w_l)[..], &pad].concat();
+        let w_r_scalar = [&self.to_scalars(&self.cs.w_r)[..], &pad].concat();
+        let w_o_scalar = [&self.to_scalars(&self.cs.w_o)[..], &pad].concat();
+        let w_4_scalar = [&self.to_scalars(&self.cs.w_4)[..], &pad].concat();
+
+        let pad_poly: DensePolynomial<F> =
+            DensePolynomial::from_coefficients_vec(domain.ifft(&pad_eval));
+        // for i in 0..pad_poly.coeffs.len() {
+        //     println!("pad_poly[{}]: {:?}", i, pad_poly.coeffs[i]);
+        // }
+        let pad_poly = DenseOrSparsePolynomial::from(pad_poly);
+
+        let w_l_poly =
+            self.reduce_poly_div(&w_l_scalar, &pad_eval, &pad_poly, &domain, m);
+        let w_r_poly =
+            self.reduce_poly_div(&w_r_scalar, &pad_eval, &pad_poly, &domain, m);
+        let w_o_poly =
+            self.reduce_poly_div(&w_o_scalar, &pad_eval, &pad_poly, &domain, m);
+        let w_4_poly =
+            self.reduce_poly_div(&w_4_scalar, &pad_eval, &pad_poly, &domain, m);
+
+        (
+            w_l_scalar, w_r_scalar, w_o_scalar, w_4_scalar, w_l_poly, w_r_poly,
+            w_o_poly, w_4_poly,
+        )
+    }
+
+    #[allow(dead_code)]
+    fn construct_wire_poly_pairwise(
+        &self,
+        domain: GeneralEvaluationDomain<F>,
+    ) -> (
+        Vec<F>,
+        Vec<F>,
+        Vec<F>,
+        Vec<F>,
+        DensePolynomial<F>,
+        DensePolynomial<F>,
+        DensePolynomial<F>,
+        DensePolynomial<F>,
+    ) {
+        let n = domain.size();
+        let m = self.cs.w_l.len();
+
+        // zero's pad - works
+        let pad: Vec<F> = (m..n).map(|_| F::zero()).collect();
+        let pad_eval = self.zero_pad_evaluations_recursive(m, domain);
+
+        let w_l_scalar = [&self.to_scalars(&self.cs.w_l)[..], &pad].concat();
+        let w_r_scalar = [&self.to_scalars(&self.cs.w_r)[..], &pad].concat();
+        let w_o_scalar = [&self.to_scalars(&self.cs.w_o)[..], &pad].concat();
+        let w_4_scalar = [&self.to_scalars(&self.cs.w_4)[..], &pad].concat();
+
+        let pad_poly: DensePolynomial<F> =
+            DensePolynomial::from_coefficients_vec(domain.ifft(&pad_eval));
+        let pad_poly = DenseOrSparsePolynomial::from(pad_poly);
+
+        let w_l_poly =
+            self.reduce_poly_div(&w_l_scalar, &pad_eval, &pad_poly, &domain, m);
+        let w_r_poly =
+            self.reduce_poly_div(&w_r_scalar, &pad_eval, &pad_poly, &domain, m);
+        let w_o_poly =
+            self.reduce_poly_div(&w_o_scalar, &pad_eval, &pad_poly, &domain, m);
+        let w_4_poly =
+            self.reduce_poly_div(&w_4_scalar, &pad_eval, &pad_poly, &domain, m);
+
+        (
+            w_l_scalar, w_r_scalar, w_o_scalar, w_4_scalar, w_l_poly, w_r_poly,
+            w_o_poly, w_4_poly,
+        )
+    }
+
     /// Creates a [`Proof]` that demonstrates that a circuit is satisfied.
     /// # Note
     /// If you intend to construct multiple [`Proof`]s with different witnesses,
@@ -187,22 +502,27 @@ where
         //
         // Convert Variables to scalars padding them to the
         // correct domain size.
-        let pad = vec![F::zero(); n - self.cs.w_l.len()];
-        let w_l_scalar = &[&self.to_scalars(&self.cs.w_l)[..], &pad].concat();
-        let w_r_scalar = &[&self.to_scalars(&self.cs.w_r)[..], &pad].concat();
-        let w_o_scalar = &[&self.to_scalars(&self.cs.w_o)[..], &pad].concat();
-        let w_4_scalar = &[&self.to_scalars(&self.cs.w_4)[..], &pad].concat();
 
-        // Witnesses are now in evaluation form, convert them to coefficients
-        // so that we may commit to them.
-        let w_l_poly =
-            DensePolynomial::from_coefficients_vec(domain.ifft(w_l_scalar));
-        let w_r_poly =
-            DensePolynomial::from_coefficients_vec(domain.ifft(w_r_scalar));
-        let w_o_poly =
-            DensePolynomial::from_coefficients_vec(domain.ifft(w_o_scalar));
-        let w_4_poly =
-            DensePolynomial::from_coefficients_vec(domain.ifft(w_4_scalar));
+        let (w_l, w_r, w_o, w_4, w_l_poly, w_r_poly, w_o_poly, w_4_poly) =
+            self.construct_wire_poly(domain);
+
+        // let (w_l, w_r, w_o, w_4, w_l_poly, w_r_poly, w_o_poly, w_4_poly) =
+        //     self.construct_wire_poly_variant(domain);
+
+        // println!("deg: {:?}", w_l_poly.degree());
+        // for i in 0..domain.size() {
+        //     println!(
+        //         "w_l_poly[{}]: {:?} w_l_scalar: {:?}",
+        //         i,
+        //         w_l_poly.evaluate(&domain.element(i)),
+        //         w_l[i],
+        //     );
+        // }
+
+        let w_l_scalar = &w_l;
+        let w_r_scalar = &w_r;
+        let w_o_scalar = &w_o;
+        let w_4_scalar = &w_4;
 
         let w_polys = [
             label_polynomial!(w_l_poly),

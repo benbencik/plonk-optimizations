@@ -147,11 +147,13 @@ fn main() -> Result<(), Error> {
 
     // Verifier POV
     let verifier_data = VerifierData::new(vk, pi);
-    verify_proof::<BlsScalar, JubJubParameters, PC>(
+    let res = verify_proof::<BlsScalar, JubJubParameters, PC>(
         &pp,
         verifier_data.key,
         &proof,
         &verifier_data.pi,
         b"Test",
-    )
+    );
+    println!("Verification result: {:?}", res);
+    res
 }
