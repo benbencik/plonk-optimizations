@@ -19,11 +19,11 @@ use crate::{
 };
 use ark_ec::{ModelParameters, TEModelParameters};
 use ark_ff::PrimeField;
+use ark_poly::domain;
 use ark_poly::univariate::DenseOrSparsePolynomial;
-use ark_poly::Polynomial;
 use ark_poly::{
     univariate::DensePolynomial, EvaluationDomain, GeneralEvaluationDomain,
-    UVPolynomial,
+    Polynomial, UVPolynomial,
 };
 use core::marker::PhantomData;
 use itertools::izip;
@@ -216,13 +216,10 @@ where
         DensePolynomial<F>,
         DensePolynomial<F>,
     ) {
-        // println!("Standard implementation");
-
+        #[allow(unused_variables)]
         let n = domain.size();
-        // let pad = vec![F::one(); n - self.cs.w_l.len()];
-        let pad: Vec<F> = (n - self.cs.w_l.len()..n)
-            .map(|i| domain.element(i))
-            .collect();
+        let pad = vec![F::zero(); n - self.cs.w_l.len()];
+
         let w_l_scalar = [&self.to_scalars(&self.cs.w_l)[..], &pad].concat();
         let w_r_scalar = [&self.to_scalars(&self.cs.w_r)[..], &pad].concat();
         let w_o_scalar = [&self.to_scalars(&self.cs.w_o)[..], &pad].concat();
@@ -267,11 +264,12 @@ where
             DensePolynomial::from_coefficients_vec(domain.ifft(&pad_mul)),
         );
         let reduced = w_poly.divide_with_q_and_r(&pad_poly).unwrap();
-        println!(
-            "result: {:?}, remainder: {:?}",
-            reduced.0.degree(),
-            reduced.1.degree()
-        );
+
+        #[cfg(feature = "dbg")]
+        {
+            println!("Remainder coefficients {:?}", reduced.1.coeffs);
+        }
+
         let res = reduced.0;
         res
     }
@@ -302,11 +300,11 @@ where
         // let pad: Vec<F> = vec![F::one(); n - m];
         // let pad_eval = vec![F::one(); n];
 
-        // x pad - xxx
+        // // x pad - xxx
         // let pad: Vec<F> = (m..n).map(|i| domain.element(i)).collect();
         // let pad_eval: Vec<F> = (0..n).map(|i| domain.element(i)).collect();
 
-        // // x - omega^m - works
+        // x - omega^m - works
         // let pad: Vec<F> = (m..n)
         //     .map(|i| domain.element(i) - domain.element(m))
         //     .collect();
@@ -314,90 +312,26 @@ where
         //     .map(|i| domain.element(i) - domain.element(m))
         //     .collect();
 
-        // // x + omega^{n-m} - works
+        // for i in 0..n {
+        //     let x = domain.element(i) + domain.element(m);
+        //     println!("x: {:?}", x);
+        // }
+
+        // println!("{:?}", domain.element(4) + domain.element(m));
+        // for x in domain_elements.iter() {
+        //     println!("{:?}", x);
+        // }
+
+        // find position of x in domain elements
+        // let pos = domain_elements.iter().position(|&r| r == x).unwrap();
+        // println!("x: {:?} pos: {:?}", x, pos);
+
+        // x + omega^{n-m} - works
         // let pad: Vec<F> = (m..n)
         //     .map(|i| domain.element(i) + domain.element(n - m))
         //     .collect();
         // let pad_eval: Vec<F> = (0..n)
         //     .map(|i| domain.element(i) + domain.element(n - m))
-        //     .collect();
-
-        // // x - omega^{m+1} - works
-        // let pad: Vec<F> = (m..n)
-        //     .map(|i| domain.element(i) - domain.element(m + 1))
-        //     .collect();
-        // let pad_eval: Vec<F> = (0..n)
-        //     .map(|i| domain.element(i) - domain.element(m + 1))
-        //     .collect();
-
-        // // x - omega - works
-        // let pad: Vec<F> = (m..n)
-        //     .map(|i| domain.element(i) - domain.element(1))
-        //     .collect();
-        // let pad_eval: Vec<F> = (0..n)
-        //     .map(|i| domain.element(i) - domain.element(1))
-        //     .collect();
-
-        // // (x-omega^m)(x - omega^(m+1)) - works
-        // let pad: Vec<F> = (m..n)
-        //     .map(|i| {
-        //         (domain.element(i) - domain.element(m))
-        //             * (domain.element(i) - domain.element(m + 1))
-        //     })
-        //     .collect();
-        // let pad_eval: Vec<F> = (0..n)
-        //     .map(|i| {
-        //         (domain.element(i) - domain.element(m))
-        //             * (domain.element(i) - domain.element(m + 1))
-        //     })
-        //     .collect();
-
-        // // x^2 - x*omega^{2m+1} + omega^{2m+1}
-        // let pad: Vec<F> = (m..n)
-        //     .map(|i| {
-        //         (domain.element(i) * domain.element(i))
-        //             - domain.element(2 * m + 1) * domain.element(i)
-        //             + domain.element(2 * m + 1)
-        //     })
-        //     .collect();
-        // let pad_eval: Vec<F> = (0..n)
-        //     .map(|i| {
-        //         (domain.element(i) * domain.element(i))
-        //             - domain.element(2 * m + 1) * domain.element(i)
-        //             + domain.element(2 * m + 1)
-        //     })
-        //     .collect();
-
-        // // (x-omega^m)(x - omega^(m+1))(x - omega^(m+2)) - works
-        // let pad: Vec<F> = (m..n)
-        //     .map(|i| {
-        //         (domain.element(i) - domain.element(m))
-        //             * (domain.element(i) - domain.element(m + 1))
-        //             * (domain.element(i) - domain.element(m + 2))
-        //     })
-        //     .collect();
-        // let pad_eval: Vec<F> = (0..n)
-        //     .map(|i| {
-        //         (domain.element(i) - domain.element(m))
-        //             * (domain.element(i) - domain.element(m + 1))
-        //             * (domain.element(i) - domain.element(m + 2))
-        //     })
-        //     .collect();
-
-        // // x^3 - x^2*omega^{m+2}
-        // let pad: Vec<F> = (m..n)
-        //     .map(|i| {
-        //         (domain.element(i) * domain.element(i) * domain.element(i))
-        //             - (domain.element(i) * domain.element(i))
-        //                 * domain.element(m + 2)
-        //     })
-        //     .collect();
-        // let pad_eval: Vec<F> = (0..n)
-        //     .map(|i| {
-        //         (domain.element(i) * domain.element(i) * domain.element(i))
-        //             - (domain.element(i) * domain.element(i))
-        //                 * domain.element(m + 2)
-        //     })
         //     .collect();
 
         let w_l_scalar = [&self.to_scalars(&self.cs.w_l)[..], &pad].concat();
@@ -407,9 +341,6 @@ where
 
         let pad_poly: DensePolynomial<F> =
             DensePolynomial::from_coefficients_vec(domain.ifft(&pad_eval));
-        // for i in 0..pad_poly.coeffs.len() {
-        //     println!("pad_poly[{}]: {:?}", i, pad_poly.coeffs[i]);
-        // }
         let pad_poly = DenseOrSparsePolynomial::from(pad_poly);
 
         let w_l_poly =
@@ -459,7 +390,6 @@ where
         );
 
         // interpolate reduced wire polynomial
-
         DensePolynomial::from_coefficients_vec(
             domain.coset_ifft(&pad_mul_coset_eval),
         )
@@ -480,7 +410,6 @@ where
         DensePolynomial<F>,
         DensePolynomial<F>,
     ) {
-        // println!("Pairwise division implementation");
         let n = domain.size();
         let m = self.cs.w_l.len();
 
@@ -529,6 +458,84 @@ where
         )
     }
 
+    #[allow(dead_code)]
+    /// This reduction uses just the zero padding but percomputes
+    /// the precomputation should be in setup!!!
+    fn construct_wire_pairwise_div_precomputed(
+        &self,
+        domain: GeneralEvaluationDomain<F>,
+        prover_key: &ProverKey<F>,
+    ) -> (
+        Vec<F>,
+        Vec<F>,
+        Vec<F>,
+        Vec<F>,
+        DensePolynomial<F>,
+        DensePolynomial<F>,
+        DensePolynomial<F>,
+        DensePolynomial<F>,
+    ) {
+        let n = domain.size();
+
+        // get the percomputed data
+        let m = self.cs.w_l.len();
+        let precomputation = &prover_key.precomputation;
+        let pad_poly_deg: Vec<usize> = precomputation.keys().cloned().collect();
+
+        let mut optimal_deg: usize = 0;
+        for i in 0..pad_poly_deg.len() {
+            if pad_poly_deg[i] <= n - m {
+                optimal_deg = i;
+            } else {
+                break;
+            }
+        }
+
+        let (pad_eval, pad_coset_eval) =
+            precomputation.get(&pad_poly_deg[optimal_deg]).unwrap();
+
+        // pad the wire vectors with zeros
+        let pad: Vec<F> = (m..n).map(|_| F::zero()).collect();
+        let w_l_scalar = [&self.to_scalars(&self.cs.w_l)[..], &pad].concat();
+        let w_r_scalar = [&self.to_scalars(&self.cs.w_r)[..], &pad].concat();
+        let w_o_scalar = [&self.to_scalars(&self.cs.w_o)[..], &pad].concat();
+        let w_4_scalar = [&self.to_scalars(&self.cs.w_4)[..], &pad].concat();
+
+        // construct wire polynomials with reductions
+        let w_l_poly = self.reduce_pairwise_div(
+            &w_l_scalar,
+            &pad_eval,
+            &pad_coset_eval,
+            &domain,
+        );
+
+        let w_r_poly = self.reduce_pairwise_div(
+            &w_r_scalar,
+            &pad_eval,
+            &pad_coset_eval,
+            &domain,
+        );
+
+        let w_o_poly = self.reduce_pairwise_div(
+            &w_o_scalar,
+            &pad_eval,
+            &pad_coset_eval,
+            &domain,
+        );
+
+        let w_4_poly = self.reduce_pairwise_div(
+            &w_4_scalar,
+            &pad_eval,
+            &pad_coset_eval,
+            &domain,
+        );
+
+        (
+            w_l_scalar, w_r_scalar, w_o_scalar, w_4_scalar, w_l_poly, w_r_poly,
+            w_o_poly, w_4_poly,
+        )
+    }
+
     /// Creates a [`Proof]` that demonstrates that a circuit is satisfied.
     /// # Note
     /// If you intend to construct multiple [`Proof`]s with different witnesses,
@@ -542,10 +549,10 @@ where
         _data: PhantomData<PC>,
     ) -> Result<Proof<F, PC>, Error> {
         let domain =
-            GeneralEvaluationDomain::new(self.cs.circuit_bound()).ok_or(Error::InvalidEvalDomainSize {
-                log_size_of_group: self.cs.circuit_bound().trailing_zeros(),
-                adicity: <<F as ark_ff::FftField>::FftParams as ark_ff::FftParameters>::TWO_ADICITY,
-            })?;
+        GeneralEvaluationDomain::new(self.cs.circuit_bound()).ok_or(Error::InvalidEvalDomainSize {
+            log_size_of_group: self.cs.circuit_bound().trailing_zeros(),
+            adicity: <<F as ark_ff::FftField>::FftParams as ark_ff::FftParameters>::TWO_ADICITY,
+        })?;
         let n = domain.size();
 
         // Since the caller is passing a pre-processed circuit
@@ -562,24 +569,60 @@ where
         // correct domain size.
         let domain_elements: Vec<F> = domain.elements().collect();
 
-        // let (w_l, w_r, w_o, w_4, w_l_poly, w_r_poly, w_o_poly, w_4_poly) =
-        //     self.construct_wire_poly(domain);
+        #[allow(unused_variables)]
+        let wire_poly_time = std::time::Instant::now();
 
-        // let (w_l, w_r, w_o, w_4, w_l_poly, w_r_poly, w_o_poly, w_4_poly) =
-        // self.construct_wire_poly_div(domain, &domain_elements);
+        let (w_l, w_r, w_o, w_4, w_l_poly, w_r_poly, w_o_poly, w_4_poly) = if cfg!(
+            not(any(
+                feature = "eval-div",
+                feature = "eval-div-precomputed",
+                feature = "poly-div"
+            ))
+        ) {
+            println!("Standard implementation");
+            self.construct_wire_poly(domain)
+        } else if cfg!(feature = "poly-div") {
+            println!("Polynomial division");
+            self.construct_wire_poly_div(domain, &domain_elements)
+        } else if cfg!(feature = "eval-div") {
+            println!("Pairwise division");
+            self.construct_wire_pairwise_div(domain, &domain_elements)
+        } else if cfg!(feature = "eval-div-precomputed") {
+            println!("Pairwise division with precomputed padding polynomial");
+            self.construct_wire_pairwise_div_precomputed(domain, prover_key)
+        } else {
+            unimplemented!()
+        };
 
-        let (w_l, w_r, w_o, w_4, w_l_poly, w_r_poly, w_o_poly, w_4_poly) =
-            self.construct_wire_pairwise_div(domain, &domain_elements);
+        #[cfg(feature = "dbg")]
+        {
+            println!(
+                "n: {}, m: {}, resulting degree: {:?}",
+                n,
+                self.cs.w_l.len(),
+                w_l_poly.degree()
+            );
+            println!(
+                "Wire polynomial construction time: {:?}",
+                wire_poly_time.elapsed().as_secs_f32()
+            );
+        }
 
-        // println!("deg: {:?}", w_l_poly.degree());
-        // for i in 0..domain.size() {
-        //     println!(
-        //         "w_l_poly[{}]: {:?} w_l_scalar: {:?}",
-        //         i,
-        //         w_l_poly.evaluate(&domain.element(i)),
-        //         w_l[i],
-        //     );
-        // }
+        for i in 0..self.cs.w_l.len() {
+            if w_l_poly.evaluate(&domain.element(i)) != w_l[i] {
+                println!(
+                    "w_l(ω^{}): {:?} w_l_scalar: {:?}",
+                    i + 1,
+                    w_l[i],
+                    w_l_poly.evaluate(&domain.element(i)),
+                );
+            } else {
+                println!("w_l(ω^{}): OK", i + 1);
+            }
+        }
+
+        #[allow(unused_variables)]
+        let proof_time = std::time::Instant::now();
 
         let w_l_scalar = &w_l;
         let w_r_scalar = &w_r;
@@ -1011,6 +1054,11 @@ where
             None,
         )
         .map_err(to_pc_error::<F, PC>)?;
+
+        #[cfg(feature = "dbg")]
+        {
+            println!("Proof time: {:?}", proof_time.elapsed().as_secs_f32());
+        }
 
         Ok(Proof {
             a_comm: w_commits[0].commitment().clone(),

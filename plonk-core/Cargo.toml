@@ -46,6 +46,12 @@ trace = []
 # Tracing Printing Features
 trace-print = ["trace", "std"]
 
+# testing 
+dbg = []
+eval-div = []
+eval-div-precomputed = []
+poly-div = []
+
 [dependencies]
 rayon = "1.5.1"
 ark-bls12-381 = "0.3"
