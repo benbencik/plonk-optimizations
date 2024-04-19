@@ -22,8 +22,13 @@ use crate::{
     transcript::TranscriptProtocol,
 };
 use ark_ff::PrimeField;
-use ark_poly::{univariate::DensePolynomial, Evaluations};
+use ark_poly::{
+    univariate::DensePolynomial, EvaluationDomain, Evaluations,
+    GeneralEvaluationDomain, UVPolynomial,
+};
 use ark_serialize::*;
+use ark_std::log2;
+use std::collections::BTreeMap;
 
 /// Set of values needed for a custom gate
 pub trait CustomValues<F>
@@ -334,12 +339,83 @@ where
     /// in their evaluation phase and divide by the quotient
     /// polynomial without having to perform IFFT
     pub(crate) v_h_coset_8n: Evaluations<F>,
+
+    pub(crate) precomputation: BTreeMap<usize, (Vec<F>, Vec<F>)>,
 }
 
 impl<F> ProverKey<F>
 where
     F: PrimeField,
 {
+    #[allow(dead_code)]
+    /// Compute evaluations of zero padding polynomial recursively
+    pub(crate) fn zero_pad_evaluations_recursive(
+        m: usize,
+        domain_elements: &Vec<F>,
+    ) -> Vec<F> {
+        let n = domain_elements.len();
+
+        let mut pad_eval = vec![F::zero(); m];
+        pad_eval[0] = domain_elements
+            .iter()
+            .skip(m)
+            .fold(F::one(), |acc, &x| acc * (domain_elements[0] - x));
+
+        for i in 1..m {
+            let nom = domain_elements[i - 1] - domain_elements[m - 1];
+            let denom = domain_elements[i - 1] - domain_elements[n - 1];
+            pad_eval[i] =
+                (nom * domain_elements[n - m]) / denom * pad_eval[i - 1];
+        }
+
+        pad_eval
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn prover_precomputation(
+        n: usize,
+    ) -> BTreeMap<usize, (Vec<F>, Vec<F>)> {
+        let domain: GeneralEvaluationDomain<F> =
+            GeneralEvaluationDomain::new(n).unwrap();
+        let domain_elements: Vec<F> = domain.elements().collect();
+
+        // let percomputation_time = std::time::Instant::now();
+        let elements = (log2(n / 2) * log2(n / 2)) as usize;
+
+        // the size of the padding cannot be more that n / 2
+        let pad_poly_deg: Vec<usize> = (1..elements)
+            .map(|i| (n / 2) / elements as usize * i)
+            .collect();
+
+        // println!(
+        //     "n/2: {:?}, number of precomputations: {:?}",
+        //     n / 2,
+        //     pad_poly_deg.len()
+        // );
+
+        let mut precomputation: BTreeMap<usize, (Vec<F>, Vec<F>)> =
+            BTreeMap::new();
+        // let mut precomputation: HashMap<usize, (Vec<F>, Vec<F>)> =
+        // HashMap::new();
+
+        // println!("{:?}", pad_poly_deg);
+        for i in &pad_poly_deg {
+            let pad_eval =
+                Self::zero_pad_evaluations_recursive(n - *i, &domain_elements);
+            let pad_poly: DensePolynomial<F> =
+                DensePolynomial::from_coefficients_vec(domain.ifft(&pad_eval));
+            let pad_coset_eval = domain.coset_fft(&pad_poly.coeffs);
+
+            precomputation.insert(*i, (pad_eval, pad_coset_eval));
+        }
+        // println!(
+        //     "Precomputation time: {:?}",
+        //     percomputation_time.elapsed().as_secs_f32()
+        // );
+
+        precomputation
+    }
+
     pub(crate) fn v_h_coset_8n(&self) -> &Evaluations<F> {
         &self.v_h_coset_8n
     }
@@ -375,6 +451,8 @@ where
         table_3: MultiSet<F>,
         table_4: MultiSet<F>,
     ) -> Self {
+        let precomputation = Self::prover_precomputation(n);
+
         Self {
             n,
             arithmetic: arithmetic::ProverKey {
@@ -408,6 +486,7 @@ where
                 linear_evaluations,
             },
             v_h_coset_8n,
+            precomputation,
         }
     }
 }
