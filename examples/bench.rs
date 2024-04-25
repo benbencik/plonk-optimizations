@@ -62,9 +62,8 @@ where
     P: TEModelParameters<BaseField = F>,
     HC: HomomorphicCommitment<F>,
 {
-    // let deg = vec![16, 17, 18, 19];
-    let deg = vec![17];
-    let rep = 3;
+    let deg = vec![8, 10, 12, 14, 16, 18, 20];
+    let rep = 4;
     let label = b"ark".as_slice();
     let pp = HC::setup(1 << deg.iter().max().unwrap(), None, &mut OsRng)
         .expect("Unable to sample public parameters.");

@@ -75,6 +75,7 @@ fn kzg10_benchmarks(c: &mut Criterion) {
     >("KZG10", c);
 }
 
+#[allow(dead_code)]
 fn ipa_benchmarks(c: &mut Criterion) {
     constraint_system_benchmark::<
         <Bls12_377 as PairingEngine>::Fr,
@@ -92,8 +93,8 @@ where
 {
     let label = b"ark".as_slice();
 
-    const MINIMUM_DEGREE: usize = 5;
-    const MAXIMUM_DEGREE: usize = 19;
+    const MINIMUM_DEGREE: usize = 14;
+    const MAXIMUM_DEGREE: usize = 18;
 
     let pp = HC::setup(1 << MAXIMUM_DEGREE, None, &mut OsRng)
         .expect("Unable to sample public parameters.");
@@ -164,6 +165,6 @@ where
 criterion_group! {
     name = plonk;
     config = Criterion::default().sample_size(10);
-    targets = kzg10_benchmarks, ipa_benchmarks
+    targets = kzg10_benchmarks
 }
 criterion_main!(plonk);

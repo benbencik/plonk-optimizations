@@ -608,18 +608,18 @@ where
             );
         }
 
-        for i in 0..self.cs.w_l.len() {
-            if w_l_poly.evaluate(&domain.element(i)) != w_l[i] {
-                println!(
-                    "w_l(ω^{}): {:?} w_l_scalar: {:?}",
-                    i + 1,
-                    w_l[i],
-                    w_l_poly.evaluate(&domain.element(i)),
-                );
-            } else {
-                println!("w_l(ω^{}): OK", i + 1);
-            }
-        }
+        // for i in 0..self.cs.w_l.len() {
+        //     if w_l_poly.evaluate(&domain.element(i)) != w_l[i] {
+        //         println!(
+        //             "w_l(ω^{}): {:?} w_l_scalar: {:?}",
+        //             i + 1,
+        //             w_l[i],
+        //             w_l_poly.evaluate(&domain.element(i)),
+        //         );
+        //     } else {
+        //         println!("w_l(ω^{}): OK", i + 1);
+        //     }
+        // }
 
         #[allow(unused_variables)]
         let proof_time = std::time::Instant::now();
