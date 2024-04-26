@@ -548,6 +548,8 @@ where
         prover_key: &ProverKey<F>,
         _data: PhantomData<PC>,
     ) -> Result<Proof<F, PC>, Error> {
+        let wire_poly_time = std::time::Instant::now();
+
         let domain =
         GeneralEvaluationDomain::new(self.cs.circuit_bound()).ok_or(Error::InvalidEvalDomainSize {
             log_size_of_group: self.cs.circuit_bound().trailing_zeros(),
@@ -570,8 +572,6 @@ where
         let domain_elements: Vec<F> = domain.elements().collect();
 
         #[allow(unused_variables)]
-        let wire_poly_time = std::time::Instant::now();
-
         let (w_l, w_r, w_o, w_4, w_l_poly, w_r_poly, w_o_poly, w_4_poly) = if cfg!(
             not(any(
                 feature = "eval-div",
@@ -594,20 +594,6 @@ where
             unimplemented!()
         };
 
-        #[cfg(feature = "dbg")]
-        {
-            println!(
-                "n: {}, m: {}, resulting degree: {:?}",
-                n,
-                self.cs.w_l.len(),
-                w_l_poly.degree()
-            );
-            println!(
-                "Wire polynomial construction time: {:?}",
-                wire_poly_time.elapsed().as_secs_f32()
-            );
-        }
-
         // for i in 0..self.cs.w_l.len() {
         //     if w_l_poly.evaluate(&domain.element(i)) != w_l[i] {
         //         println!(
@@ -620,9 +606,6 @@ where
         //         println!("w_l(ω^{}): OK", i + 1);
         //     }
         // }
-
-        #[allow(unused_variables)]
-        let proof_time = std::time::Instant::now();
 
         let w_l_scalar = &w_l;
         let w_r_scalar = &w_r;
@@ -646,7 +629,23 @@ where
         transcript.append(b"w_o", w_commits[2].commitment());
         transcript.append(b"w_4", w_commits[3].commitment());
 
+        #[cfg(feature = "dbg")]
+        {
+            println!(
+                "n: {}, m: {}, resulting degree: {:?}",
+                n,
+                self.cs.w_l.len(),
+                w_l_poly.degree()
+            );
+            println!(
+                "Wire polynomial construction time: {:?}",
+                wire_poly_time.elapsed().as_secs_f32()
+            );
+        }
+
         // 2. Derive lookup polynomials
+        #[allow(unused_variables)]
+        let proof_time = std::time::Instant::now();
 
         // Generate table compression factor
         let zeta = transcript.challenge_scalar(b"zeta");
