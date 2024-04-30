@@ -62,19 +62,21 @@ where
     P: TEModelParameters<BaseField = F>,
     HC: HomomorphicCommitment<F>,
 {
-    let deg = vec![8, 10, 12, 14, 16, 18, 20];
+    let deg = vec![6, 8];
+    // let deg = vec![15, 16, 17, 18, 19, 20];
     let rep = 4;
     let label = b"ark".as_slice();
     let pp = HC::setup(1 << deg.iter().max().unwrap(), None, &mut OsRng)
         .expect("Unable to sample public parameters.");
 
     for degree in deg {
-        println!("\nRunning prover for degree: {}", degree);
+        println!("\nRUNNING PROVER FOR DEGREE: {}", degree);
         let mut circuit = BenchCircuit::<F, P>::new(degree);
         let (pk_p, _) = circuit
             .compile::<HC>(&pp)
             .expect("Unable to compile circuit.");
-        for _ in 0..rep {
+        for i in 0..rep {
+            println!("\nItteration {}", i);
             circuit.gen_proof::<HC>(&pp, pk_p.clone(), &label).unwrap();
         }
     }

@@ -19,7 +19,6 @@ use crate::{
 };
 use ark_ec::{ModelParameters, TEModelParameters};
 use ark_ff::PrimeField;
-use ark_poly::domain;
 use ark_poly::univariate::DenseOrSparsePolynomial;
 use ark_poly::{
     univariate::DensePolynomial, EvaluationDomain, GeneralEvaluationDomain,
@@ -29,6 +28,10 @@ use core::marker::PhantomData;
 use itertools::izip;
 use merlin::Transcript;
 use rayon::prelude::*;
+
+use env_logger::Env;
+use log;
+use memory_stats::memory_stats;
 
 /// Abstraction structure designed to construct a circuit and generate
 /// [`Proof`]s for it.
@@ -264,14 +267,7 @@ where
             DensePolynomial::from_coefficients_vec(domain.ifft(&pad_mul)),
         );
         let reduced = w_poly.divide_with_q_and_r(&pad_poly).unwrap();
-
-        #[cfg(feature = "dbg")]
-        {
-            println!("Remainder coefficients {:?}", reduced.1.coeffs);
-        }
-
-        let res = reduced.0;
-        res
+        reduced.0
     }
 
     #[allow(dead_code)]
@@ -292,47 +288,17 @@ where
         let n = domain.size();
         let m = self.cs.w_l.len();
 
-        // zero's pad - works
+        // zero's pad
         let pad: Vec<F> = (m..n).map(|_| F::zero()).collect();
         let pad_eval = self.zero_pad_evaluations_recursive(m, domain_elements);
 
-        // // one's pad
+        // one's
         // let pad: Vec<F> = vec![F::one(); n - m];
         // let pad_eval = vec![F::one(); n];
 
-        // // x pad - xxx
+        // x pad
         // let pad: Vec<F> = (m..n).map(|i| domain.element(i)).collect();
         // let pad_eval: Vec<F> = (0..n).map(|i| domain.element(i)).collect();
-
-        // x - omega^m - works
-        // let pad: Vec<F> = (m..n)
-        //     .map(|i| domain.element(i) - domain.element(m))
-        //     .collect();
-        // let pad_eval: Vec<F> = (0..n)
-        //     .map(|i| domain.element(i) - domain.element(m))
-        //     .collect();
-
-        // for i in 0..n {
-        //     let x = domain.element(i) + domain.element(m);
-        //     println!("x: {:?}", x);
-        // }
-
-        // println!("{:?}", domain.element(4) + domain.element(m));
-        // for x in domain_elements.iter() {
-        //     println!("{:?}", x);
-        // }
-
-        // find position of x in domain elements
-        // let pos = domain_elements.iter().position(|&r| r == x).unwrap();
-        // println!("x: {:?} pos: {:?}", x, pos);
-
-        // x + omega^{n-m} - works
-        // let pad: Vec<F> = (m..n)
-        //     .map(|i| domain.element(i) + domain.element(n - m))
-        //     .collect();
-        // let pad_eval: Vec<F> = (0..n)
-        //     .map(|i| domain.element(i) + domain.element(n - m))
-        //     .collect();
 
         let w_l_scalar = [&self.to_scalars(&self.cs.w_l)[..], &pad].concat();
         let w_r_scalar = [&self.to_scalars(&self.cs.w_r)[..], &pad].concat();
@@ -548,7 +514,14 @@ where
         prover_key: &ProverKey<F>,
         _data: PhantomData<PC>,
     ) -> Result<Proof<F, PC>, Error> {
-        let wire_poly_time = std::time::Instant::now();
+        // check if the logger has been initialized
+        if !log::log_enabled!(log::Level::Info) {
+            env_logger::Builder::from_env(
+                Env::default().default_filter_or("info"),
+            )
+            .format_timestamp_nanos()
+            .init();
+        }
 
         let domain =
         GeneralEvaluationDomain::new(self.cs.circuit_bound()).ok_or(Error::InvalidEvalDomainSize {
@@ -570,6 +543,7 @@ where
         // Convert Variables to scalars padding them to the
         // correct domain size.
         let domain_elements: Vec<F> = domain.elements().collect();
+        let wire_poly_construction = std::time::Instant::now();
 
         #[allow(unused_variables)]
         let (w_l, w_r, w_o, w_4, w_l_poly, w_r_poly, w_o_poly, w_4_poly) = if cfg!(
@@ -594,18 +568,20 @@ where
             unimplemented!()
         };
 
-        // for i in 0..self.cs.w_l.len() {
-        //     if w_l_poly.evaluate(&domain.element(i)) != w_l[i] {
-        //         println!(
-        //             "w_l(ω^{}): {:?} w_l_scalar: {:?}",
-        //             i + 1,
-        //             w_l[i],
-        //             w_l_poly.evaluate(&domain.element(i)),
-        //         );
-        //     } else {
-        //         println!("w_l(ω^{}): OK", i + 1);
-        //     }
-        // }
+        if let Some(usage) = memory_stats() {
+            log::info!(
+                "Memory usage after round 1: {:.2} GB",
+                usage.physical_mem as f32 / 1024.0_f32.powf(3.0)
+            );
+        } else {
+            log::info!("Couldn't get the current memory usage :(");
+        }
+
+        log::info!("Domain size: {}, Wire poly : {}", n, w_l_poly.degree());
+        log::info!(
+            "Wire polynomial construction time: {:.2}",
+            wire_poly_construction.elapsed().as_secs_f32()
+        );
 
         let w_l_scalar = &w_l;
         let w_r_scalar = &w_r;
@@ -620,28 +596,19 @@ where
         ];
 
         // Commit to witness polynomials.
+        let wire_poly_commitment = std::time::Instant::now();
         let (w_commits, w_rands) = PC::commit(commit_key, w_polys.iter(), None)
             .map_err(to_pc_error::<F, PC>)?;
+        log::info!(
+            "Wire polynomial commitment time: {:.2}",
+            wire_poly_commitment.elapsed().as_secs_f32()
+        );
 
         // Add witness polynomial commitments to transcript.
         transcript.append(b"w_l", w_commits[0].commitment());
         transcript.append(b"w_r", w_commits[1].commitment());
         transcript.append(b"w_o", w_commits[2].commitment());
         transcript.append(b"w_4", w_commits[3].commitment());
-
-        #[cfg(feature = "dbg")]
-        {
-            println!(
-                "n: {}, m: {}, resulting degree: {:?}",
-                n,
-                self.cs.w_l.len(),
-                w_l_poly.degree()
-            );
-            println!(
-                "Wire polynomial construction time: {:?}",
-                wire_poly_time.elapsed().as_secs_f32()
-            );
-        }
 
         // 2. Derive lookup polynomials
         #[allow(unused_variables)]
@@ -852,6 +819,7 @@ where
         transcript
             .append(b"lookup separation challenge", &lookup_sep_challenge);
 
+        let quotient_poly_construct = std::time::Instant::now();
         let t_poly = quotient_poly::compute::<F, P>(
             &domain,
             prover_key,
@@ -878,7 +846,12 @@ where
             &var_base_sep_challenge,
             &lookup_sep_challenge,
         )?;
+        log::info!(
+            "Quotient polynomial construction time: {:.2}",
+            quotient_poly_construct.elapsed().as_secs_f32()
+        );
 
+        let quotient_poly_commit = std::time::Instant::now();
         let t_i_polys = self.split_tx_poly(n, &t_poly);
         // Commit to splitted quotient polynomial
         let (t_commits, _) = PC::commit(
@@ -896,6 +869,10 @@ where
             None,
         )
         .map_err(to_pc_error::<F, PC>)?;
+        log::info!(
+            "Quotient polynomial commitment time: {:.2}",
+            quotient_poly_commit.elapsed().as_secs_f32()
+        );
 
         // Add quotient polynomial commitments to transcript
         transcript.append(b"t_1", t_commits[0].commitment());
@@ -1054,10 +1031,7 @@ where
         )
         .map_err(to_pc_error::<F, PC>)?;
 
-        #[cfg(feature = "dbg")]
-        {
-            println!("Proof time: {:?}", proof_time.elapsed().as_secs_f32());
-        }
+        log::info!("Proof time: {:?}", proof_time.elapsed().as_secs_f32());
 
         Ok(Proof {
             a_comm: w_commits[0].commitment().clone(),
